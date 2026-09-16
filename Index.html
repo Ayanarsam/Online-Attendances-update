@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Rollcall — Facial Attendance</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,500;6..72,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+<style>
+  :root {
+    --paper: #E7E4DA;
+    --panel: #FDFCF8;
+    --panel-2: #EFEBE0;
+    --ink: #1C231F;
+    --ink-soft: #5B655F;
+    --accent: #1F4B43;
+    --accent-soft: #DCE7E1;
+    --ok: #2F7D5B;
+    --wait: #B4802A;
+    --err: #B14A3A;
+    --line: #D6D0BF;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "IBM Plex Sans", sans-serif;
+    background: var(--paper);
+    color: var(--ink);
+  }
+  h1, h2, .brand-name { font-family: "Newsreader", serif; }
+  .mono { font-family: "IBM Plex Mono", monospace; }
+  .hidden { display: none !important; }
+
+  /* ---------- Loading ---------- */
+  #loadingScreen {
+    max-width: 420px;
+    margin: 100px auto;
+    text-align: center;
+    padding: 0 20px;
+  }
+  #loadingScreen h1 { font-size: 22px; font-weight: 600; margin: 0 0 6px; }
+  .spinner {
+    width: 30px; height: 30px;
+    border: 3px solid var(--line);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    margin: 22px auto;
+    animation: spin 0.85s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .footer-note { color: var(--ink-soft); font-size: 13px; line-height: 1.5; }
+
+  /* ---------- Shell ---------- */
+  #app { max-width: 1220px; margin: 0 auto; padding: 36px 28px 60px; }
+  .shell {
+    display: grid;
+    grid-template-columns: 236px minmax(360px, 1fr) 296px;
+    gap: 28px;
+    align-items: start;
+  }
+  @media (max-width: 980px) {
+    .shell { grid-template-columns: 1fr; }
+  }
+
+  /* ---------- Rail (left) ---------- */
+  .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  .seal {
+    width: 34px; height: 34px; border-radius: 50%;
+    background: var(--accent); color: var(--panel);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .brand-name { font-size: 19px; font-weight: 600; color: var(--ink); }
+  .brand-tag { color: var(--ink-soft); font-size: 12.5px; margin: 6px 0 26px; line-height: 1.5; }
+
+  .nav-item {
+    display: flex; gap: 12px;
+    padding: 12px 10px;
+    border-radius: 10px;
+    cursor: pointer;
+    border-left: 2px solid transparent;
+    margin-bottom: 4px;
+  }
+  .nav-item svg { flex-shrink: 0; margin-top: 1px; color: var(--ink-soft); }
+  .nav-item .nav-title { font-size: 14px; font-weight: 600; color: var(--ink); }
+  .nav-item .nav-desc { font-size: 12px; color: var(--ink-soft); margin-top: 2px; line-height: 1.4; }
+  .nav-item.active { background: var(--panel-2); border-left-color: var(--accent); }
+  .nav-item.active svg { color: var(--accent); }
+
+  .rail-divider { height: 1px; background: var(--line); margin: 18px 4px 16px; }
+  .rail-section-label { font-size: 12px; color: var(--ink-soft); padding: 0 10px 8px; }
+
+  /* ---------- Stage (center) ---------- */
+  .stage { display: flex; flex-direction: column; align-items: center; }
+  .stage-frame {
+    position: relative;
+    width: min(360px, 100%);
+    aspect-ratio: 1;
+    border-radius: 50%;
+    overflow: hidden;
+    background: #10140F;
+    box-shadow: 0 18px 40px -18px rgba(28,35,31,0.35);
+  }
+  video, canvas.overlay {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    object-fit: cover;
+  }
+  .scan-frame { position: absolute; inset: 14%; pointer-events: none; }
+  .scan-frame .corner {
+    position: absolute; width: 22px; height: 22px;
+    border: 2px solid rgba(253,252,248,0.85);
+  }
+  .scan-frame .tl { top: 0; left: 0; border-right: none; border-bottom: none; border-radius: 6px 0 0 0; }
+  .scan-frame .tr { top: 0; right: 0; border-left: none; border-bottom: none; border-radius: 0 6px 0 0; }
+  .scan-frame .bl { bottom: 0; left: 0; border-right: none; border-top: none; border-radius: 0 0 0 6px; }
+  .scan-frame .br { bottom: 0; right: 0; border-left: none; border-top: none; border-radius: 0 0 6px 0; }
+
+  .status-bar {
+    margin-top: 18px;
+    padding: 9px 16px;
+    border-radius: 999px;
+    background: var(--panel-2);
+    font-size: 13px;
+    text-align: center;
+    min-height: 18px;
+    max-width: 380px;
+  }
+  .status-ok { color: var(--ok); background: #E4EFE7; }
+  .status-wait { color: var(--wait); background: #F3E9D6; }
+  .status-err { color: var(--err); background: #F5E3DE; }
+
+  #debugBar {
+    margin-top: 8px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    color: var(--ink-soft);
+    text-align: center;
+    min-height: 14px;
+  }
+
+  .stage-controls { width: min(380px, 100%); margin-top: 26px; text-align: center; }
+  .stage-hint { color: var(--ink-soft); font-size: 12.5px; margin-top: 10px; line-height: 1.5; }
+
+  /* ---------- Buttons & inputs ---------- */
+  .row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; justify-content: center; }
+  .ledger .row { justify-content: flex-start; }
+  input[type=text] {
+    flex: 1;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--ink);
+    font-size: 14px;
+    font-family: inherit;
+  }
+  button {
+    padding: 10px 16px;
+    border-radius: 8px;
+    border: none;
+    background: var(--accent);
+    color: var(--panel);
+    font-size: 13px;
+    cursor: pointer;
+    font-weight: 600;
+    font-family: inherit;
+  }
+  button.secondary { background: var(--panel-2); color: var(--ink); }
+  button.danger { background: var(--err); color: var(--panel); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .small-btn { padding: 4px 10px; font-size: 11px; background: var(--panel-2); color: var(--ink); }
+
+  /* ---------- Enrolled list ---------- */
+  .enrolled-list { margin-top: 14px; font-size: 13px; color: var(--ink-soft); text-align: left; }
+  .enrolled-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 8px 2px;
+    border-bottom: 1px solid var(--line);
+  }
+  .pill {
+    display: inline-block;
+    padding: 2px 9px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    font-size: 11px;
+    color: var(--accent);
+    margin-left: 6px;
+    font-family: "IBM Plex Mono", monospace;
+  }
+
+  /* ---------- Ledger (right) ---------- */
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 20px 22px;
+  }
+  .ledger h2 { font-size: 17px; font-weight: 600; margin: 0 0 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
+  th, td { text-align: left; padding: 9px 4px; border-bottom: 1px solid var(--line); }
+  th { color: var(--ink-soft); font-weight: 600; font-size: 12px; }
+  td:nth-child(3), td:nth-child(4) { font-family: "IBM Plex Mono", monospace; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<div id="loadingScreen">
+  <h1>Loading face detection models…</h1>
+  <div class="spinner"></div>
+  <div id="loadingStatus" class="footer-note">Fetching models from CDN…</div>
+</div>
+
+<div id="app" class="hidden">
+  <div class="shell">
+
+    <!-- Left rail -->
+    <div class="rail">
+      <div class="brand">
+        <div class="seal">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M4 12c2.5-4.5 6-6.5 8-6.5s5.5 2 8 6.5c-2.5 4.5-6 6.5-8 6.5s-5.5-2-8-6.5Z" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="2.3" fill="currentColor"/></svg>
+        </div>
+        <div class="brand-name">Rollcall</div>
+      </div>
+      <div class="brand-tag">Marks attendance from a face and a blink — no roster sheet to pass around.</div>
+
+      <div class="nav-item active" id="tabRecognize" onclick="setMode('recognize')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M4 12c2.5-4.5 6-6.5 8-6.5s5.5 2 8 6.5c-2.5 4.5-6 6.5-8 6.5s-5.5-2-8-6.5Z" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="2.3" stroke="currentColor" stroke-width="1.8"/></svg>
+        <div>
+          <div class="nav-title">Take roll</div>
+          <div class="nav-desc">Look at the camera and blink once to check in.</div>
+        </div>
+      </div>
+      <div class="nav-item" id="tabEnroll" onclick="setMode('enroll')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="9" cy="8" r="3.2" stroke="currentColor" stroke-width="1.8"/><path d="M3.5 19c0-3.3 2.5-5.5 5.5-5.5s5.5 2.2 5.5 5.5" stroke="currentColor" stroke-width="1.8"/><path d="M18 8v5M15.5 10.5h5" stroke="currentColor" stroke-width="1.8"/></svg>
+        <div>
+          <div class="nav-title">Enroll person</div>
+          <div class="nav-desc">Add a new face to the roster.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Center stage -->
+    <div class="stage">
+      <div class="stage-frame">
+        <video id="video" autoplay muted playsinline></video>
+        <canvas id="overlay" class="overlay"></canvas>
+        <div class="scan-frame">
+          <span class="corner tl"></span><span class="corner tr"></span>
+          <span class="corner bl"></span><span class="corner br"></span>
+        </div>
+      </div>
+      <div id="statusBar" class="status-bar status-wait">Starting camera…</div>
+      <div id="debugBar"></div>
+
+      <div id="enrollControls" class="stage-controls hidden">
+        <div class="row">
+          <button onclick="captureEnrollment()">Capture face</button>
+        </div>
+        <div class="stage-hint">Look straight at the camera with even lighting, then capture.</div>
+
+        <div id="nameSection" class="hidden">
+          <div class="row">
+            <input type="text" id="enrollName" placeholder="Person's name">
+            <input type="text" id="enrollSection" placeholder="Section, e.g. 10-B">
+          </div>
+          <div class="row">
+            <button onclick="saveEnrollmentName()">Save to roster</button>
+            <button class="secondary" onclick="cancelEnrollment()">Cancel</button>
+          </div>
+        </div>
+
+        <div class="enrolled-list" id="enrolledList"></div>
+      </div>
+    </div>
+
+    <!-- Right ledger -->
+    <div class="panel ledger">
+      <h2>Today's roll <span class="pill" id="countPill">0 records</span></h2>
+      <div class="row">
+        <button class="secondary" onclick="exportCSV()">Export CSV</button>
+        <button class="danger" onclick="clearRecords()">Clear all</button>
+      </div>
+
+      <table>
+        <thead><tr><th>Name</th><th>Section</th><th>Date</th><th>Time</th></tr></thead>
+        <tbody id="logBody"></tbody>
+      </table>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const GOOGLE_SHEET_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyadv7Q4GHWnG9XsP8J8a0rzYZJRYBsdilYWMNmMEhM0s51R6iLd0X7rM523Pzom53i/exec";
+const MODEL_URL = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/model";
+
+let mode = 'recognize';
+let labeledDescriptors = [];      
+let lastSeenBlinkState = {};      
+let video, overlay, ctx, debugBar;
+let pendingEnrollDescriptor = null;
+let prevFrameFaces = []; 
+let lastDescriptorRunAt = 0;
+let faceLandmarker = null;        // MediaPipe FaceLandmarker instance, or null if it failed to load
+let livenessMode = 'ear';         // 'mediapipe' once FaceLandmarker loads successfully, else falls back to 'ear'
+const LOOP_INTERVAL_MS = 90;          // ~11fps is plenty for blink tracking and far lighter on the CPU/GPU than uncapped RAF
+const DETECT_INPUT_SIZE = 224;        // smaller than 320 = much faster detection with negligible accuracy loss for a face filling the frame
+const DESCRIPTOR_RECOMPUTE_MS = 1200; // re-run the heavy recognition net roughly every 1.2s once a face is being tracked, not every other frame
+const BOX_MATCH_PIXELS = 60; 
+
+function loadEnrollments() {
+  const raw = localStorage.getItem('eyeAttendance_enrollments');
+  return raw ? JSON.parse(raw) : [];
+}
+function saveEnrollments(list) {
+  localStorage.setItem('eyeAttendance_enrollments', JSON.stringify(list));
+}
+function isRecordedToday(name) {
+  const today = new Date().toLocaleDateString();
+  return loadRecords().some(r => r.name === name && r.date === today);
+}
+
+function loadRecords() {
+  const raw = localStorage.getItem('eyeAttendance_records');
+  return raw ? JSON.parse(raw) : [];
+}
+function saveRecords(list) {
+  localStorage.setItem('eyeAttendance_records', JSON.stringify(list));
+}
+
+async function init() {
+  video = document.getElementById('video');
+  overlay = document.getElementById('overlay');
+  ctx = overlay.getContext('2d');
+  debugBar = document.getElementById('debugBar');
+
+  document.getElementById('loadingStatus').textContent = 'Loading face detector…';
+  try {
+    await faceapi.tf.setBackend('webgl');
+    await faceapi.tf.ready();
+  } catch (e) {
+    console.warn('WebGL backend unavailable, falling back to default:', e);
+  }
+  await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+  await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+  await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+
+  document.getElementById('loadingStatus').textContent = 'Loading blink model…';
+  try {
+    const { FaceLandmarker, FilesetResolver } = await import(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs"
+    );
+    const filesetResolver = await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+    );
+    faceLandmarker = await FaceLandmarker.createFromOptions(filesetResolver, {
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+        delegate: "GPU"
+      },
+      outputFaceBlendshapes: true,
+      runningMode: "VIDEO",
+      numFaces: 4
+    });
+    livenessMode = 'mediapipe';
+  } catch (e) {
+    console.warn('MediaPipe FaceLandmarker unavailable, falling back to EAR-based blink detection:', e);
+    faceLandmarker = null;
+    livenessMode = 'ear';
+  }
+
+  document.getElementById('loadingScreen').classList.add('hidden');
+  document.getElementById('app').classList.remove('hidden');
+
+  const stored = loadEnrollments();
+  labeledDescriptors = stored.map(e => ({
+    name: e.name,
+    section: e.section || '',
+    descriptor: new Float32Array(e.descriptor)
+  }));
+  renderEnrolledList();
+  renderLog();
+
+  await startCamera();
+  detectLoop();
+}
+
+async function startCamera() {
+  const statusBar = document.getElementById('statusBar');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
+    video.srcObject = stream;
+    await new Promise(res => video.onloadedmetadata = res);
+    overlay.width = video.videoWidth;
+    overlay.height = video.videoHeight;
+    statusBar.textContent = 'Camera ready. Waiting for face…';
+    statusBar.className = 'status-bar status-wait';
+  } catch (err) {
+    statusBar.textContent = 'Camera error: ' + err.message;
+    statusBar.className = 'status-bar status-err';
+  }
+}
+
+function eyeAspectRatio(eyePoints) {
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  const p = eyePoints;
+  const vertical1 = dist(p[1], p[5]);
+  const vertical2 = dist(p[2], p[4]);
+  const horizontal = dist(p[0], p[3]);
+  return (vertical1 + vertical2) / (2.0 * horizontal);
+}
+
+const MATCH_DISTANCE_THRESHOLD = 0.45; 
+const MATCH_MARGIN = 0.06;             
+const CONFIRM_STREAK_REQUIRED = 1;     
+const BLINKS_REQUIRED = 1;       
+const BLINK_SEQUENCE_WINDOW_MS = 4000; 
+const MP_MATCH_PIXELS = 80;          // how close a MediaPipe face must be (in video px) to a face-api box to treat them as the same person
+const BLINK_CLOSE_SCORE = 0.4;       // MediaPipe eyeBlink blendshape score above which we call the eye "closing" — same for everyone, no per-person calibration needed
+const BLINK_OPEN_SCORE = 0.15;       // score below which we call it "open" again (gap between the two avoids flicker right at the edge)
+
+function getMediapipeBlinkFaces() {
+  if (!faceLandmarker) return [];
+  let result;
+  try {
+    result = faceLandmarker.detectForVideo(video, performance.now());
+  } catch (e) {
+    return [];
+  }
+  const faces = [];
+  for (let i = 0; i < result.faceLandmarks.length; i++) {
+    const lm = result.faceLandmarks[i];
+    let minX = 1, maxX = 0, minY = 1, maxY = 0;
+    for (const p of lm) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    const cats = result.faceBlendshapes[i]?.categories || [];
+    const score = (n) => cats.find(c => c.categoryName === n)?.score ?? 0;
+    // eyeBlinkLeft/Right are blendshape coefficients MediaPipe was specifically trained to output for blinking —
+    // 0 = eye fully open, 1 = eye fully closed. Averaging both eyes smooths out a wink vs. a genuine blink.
+    const blinkScore = (score('eyeBlinkLeft') + score('eyeBlinkRight')) / 2;
+    faces.push({
+      cx: ((minX + maxX) / 2) * video.videoWidth,
+      cy: ((minY + maxY) / 2) * video.videoHeight,
+      blinkScore
+    });
+  }
+  return faces;
+}
+
+async function detectLoop() {
+  const statusBar = document.getElementById('statusBar');
+
+  if (video.readyState === 4) {
+    const now = performance.now();
+    const runFullRecognition = mode === 'enroll' || prevFrameFaces.length === 0 || (now - lastDescriptorRunAt >= DESCRIPTOR_RECOMPUTE_MS);
+    if (runFullRecognition) lastDescriptorRunAt = now;
+
+    let detections;
+    if (runFullRecognition) {
+      detections = await faceapi
+        .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions({ inputSize: DETECT_INPUT_SIZE, scoreThreshold: 0.5 }))
+        .withFaceLandmarks()
+        .withFaceDescriptors();
+    } else {
+      detections = await faceapi
+        .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions({ inputSize: DETECT_INPUT_SIZE, scoreThreshold: 0.5 }))
+        .withFaceLandmarks();
+    }
+
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+    const mpFaces = livenessMode === 'mediapipe' ? getMediapipeBlinkFaces() : [];
+    const newFrameFaces = [];
+
+    if (detections.length === 0) {
+      statusBar.textContent = 'No face detected.';
+      statusBar.className = 'status-bar status-wait';
+    } else {
+      for (const det of detections) {
+        const landmarks = det.landmarks;
+        const box = det.detection.box;
+        const boxCenterX = box.x + box.width / 2;
+        const boxCenterY = box.y + box.height / 2;
+
+        let blink; // unified 0 (eyes open) .. 1 (eyes closed) signal
+        if (livenessMode === 'mediapipe') {
+          let matchedMp = null, matchedMpDist = Infinity;
+          for (const mp of mpFaces) {
+            const d = Math.hypot(mp.cx - boxCenterX, mp.cy - boxCenterY);
+            if (d < matchedMpDist) { matchedMpDist = d; matchedMp = mp; }
+          }
+          if (matchedMp && matchedMpDist <= MP_MATCH_PIXELS) blink = matchedMp.blinkScore;
+        }
+        if (blink === undefined) {
+          // Fallback only: face-api's own 68-point landmarks weren't trained on many closed-eye examples,
+          // so this EAR heuristic is the weaker signal — used only if MediaPipe failed to load or missed this face.
+          const leftEye = landmarks.getLeftEye();
+          const rightEye = landmarks.getRightEye();
+          const ear = (eyeAspectRatio(leftEye) + eyeAspectRatio(rightEye)) / 2;
+          blink = Math.max(0, Math.min(1, (0.34 - ear) / 0.14));
+        }
+
+        let name = 'Unknown';
+        let bestDist = Infinity;
+        let rawCandidateName = 'Unknown';
+        let streak = 0;
+
+        let matchedPrev = null;
+        let matchedPrevPixelDist = Infinity;
+        for (const prev of prevFrameFaces) {
+          const d = Math.hypot(prev.boxCenterX - boxCenterX, prev.boxCenterY - boxCenterY);
+          if (d < matchedPrevPixelDist) { matchedPrevPixelDist = d; matchedPrev = prev; }
+        }
+        const hasPrevTrack = matchedPrev && matchedPrevPixelDist <= BOX_MATCH_PIXELS;
+
+        if (runFullRecognition) {
+          let secondBestDist = Infinity;
+          if (labeledDescriptors.length > 0) {
+            for (const entry of labeledDescriptors) {
+              const dist = faceapi.euclideanDistance(det.descriptor, entry.descriptor);
+              if (dist < bestDist) {
+                secondBestDist = bestDist;
+                bestDist = dist;
+                rawCandidateName = entry.name;
+              } else if (dist < secondBestDist) {
+                secondBestDist = dist;
+              }
+            }
+            const marginOk = (secondBestDist - bestDist) >= MATCH_MARGIN || labeledDescriptors.length === 1;
+            if (bestDist > MATCH_DISTANCE_THRESHOLD || !marginOk) rawCandidateName = 'Unknown';
+          }
+          if (mode === 'enroll') pendingEnrollDescriptor = det.descriptor;
+
+          if (hasPrevTrack && matchedPrev.rawCandidateName === rawCandidateName) {
+            streak = matchedPrev.streak + 1;
+          } else {
+            streak = 1; 
+          }
+          name = (rawCandidateName !== 'Unknown' && streak >= CONFIRM_STREAK_REQUIRED) ? rawCandidateName : 'Unknown';
+        } else {
+          if (hasPrevTrack) {
+            name = matchedPrev.name;
+            bestDist = matchedPrev.bestDist;
+            rawCandidateName = matchedPrev.rawCandidateName;
+            streak = matchedPrev.streak;
+          }
+        }
+
+        newFrameFaces.push({ boxCenterX, boxCenterY, name, bestDist, rawCandidateName, streak });
+        drawBox(box, name, blink, bestDist);
+
+        if (mode === 'recognize' && name !== 'Unknown') {
+          processLiveness(name, blink, statusBar);
+        } else if (mode === 'recognize') {
+          statusBar.textContent = rawCandidateName !== 'Unknown'
+            ? `Verifying face… (${streak}/${CONFIRM_STREAK_REQUIRED} matches for "${rawCandidateName}")`
+            : 'Face not recognized. Enroll first.';
+          statusBar.className = 'status-bar status-wait';
+        }
+      }
+    }
+
+    prevFrameFaces = newFrameFaces;
+  }
+  setTimeout(detectLoop, LOOP_INTERVAL_MS);
+}
+
+function processLiveness(name, blink, statusBar) {
+  if (!lastSeenBlinkState[name]) {
+    lastSeenBlinkState[name] = { isClosed: false, blinkCount: 0, firstBlinkAt: 0 };
+  }
+  const state = lastSeenBlinkState[name];
+
+  if (isRecordedToday(name)) {
+    statusBar.textContent = `${name} already marked present today.`;
+    statusBar.className = 'status-bar status-ok';
+    return;
+  }
+
+  const now = Date.now();
+
+  if (state.blinkCount > 0 && now - state.firstBlinkAt > BLINK_SEQUENCE_WINDOW_MS) {
+    state.blinkCount = 0;
+  }
+
+  if (!state.isClosed && blink > BLINK_CLOSE_SCORE) {
+    state.isClosed = true;
+  } else if (state.isClosed && blink < BLINK_OPEN_SCORE) {
+    state.isClosed = false;
+    if (state.blinkCount === 0) state.firstBlinkAt = now;
+    state.blinkCount += 1;
+  }
+
+  debugBar.textContent = `mode=${livenessMode}  blink=${blink.toFixed(3)}  closeAt>${BLINK_CLOSE_SCORE}  reopenAt<${BLINK_OPEN_SCORE}  closed=${state.isClosed}  blinks=${state.blinkCount}`;
+
+  if (state.blinkCount >= BLINKS_REQUIRED) {
+    recordAttendance(name);
+    state.blinkCount = 0;
+    statusBar.textContent = `✓ Attendance recorded for ${name} & synced to Google Sheet!`;
+    statusBar.className = 'status-bar status-ok';
+  } else {
+    statusBar.textContent = `${name} recognized. Blink ${state.blinkCount}/${BLINKS_REQUIRED} detected…`;
+    statusBar.className = 'status-bar status-wait';
+  }
+}
+
+function drawBox(box, name, blink, dist) {
+  ctx.strokeStyle = name === 'Unknown' ? '#ff5b6e' : '#37d67a';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(box.x, box.y, box.width, box.height);
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(box.x, box.y - 20, Math.max(box.width, 140), 20);
+  ctx.fillStyle = '#fff';
+  ctx.font = '13px sans-serif';
+  const distText = (dist !== undefined && isFinite(dist)) ? ` dist:${dist.toFixed(2)}` : '';
+  ctx.fillText(`${name}  Blink:${blink.toFixed(2)}${distText}`, box.x + 4, box.y - 6);
+}
+
+let capturedDescriptorForSave = null;
+
+function captureEnrollment() {
+  if (!pendingEnrollDescriptor) { alert('No face detected right now.'); return; }
+  capturedDescriptorForSave = pendingEnrollDescriptor;
+  document.getElementById('nameSection').classList.remove('hidden');
+  document.getElementById('enrollName').value = '';
+  document.getElementById('enrollName').focus();
+}
+
+function saveEnrollmentName() {
+  const nameInput = document.getElementById('enrollName');
+  const sectionInput = document.getElementById('enrollSection');
+  const name = nameInput.value.trim();
+  const section = sectionInput.value.trim();
+  if (!name || !section) { alert('Please enter both name and section.'); return; }
+
+  const existingIdx = labeledDescriptors.findIndex(e => e.name === name);
+  const entry = { name, section, descriptor: capturedDescriptorForSave };
+  if (existingIdx >= 0) labeledDescriptors[existingIdx] = entry;
+  else labeledDescriptors.push(entry);
+
+  saveEnrollments(labeledDescriptors.map(e => ({ name: e.name, section: e.section, descriptor: Array.from(e.descriptor) })));
+  capturedDescriptorForSave = null;
+  document.getElementById('nameSection').classList.add('hidden');
+  nameInput.value = '';
+  sectionInput.value = '';
+  renderEnrolledList();
+}
+
+function cancelEnrollment() {
+  capturedDescriptorForSave = null;
+  document.getElementById('nameSection').classList.add('hidden');
+}
+
+function deleteEnrollment(name) {
+  labeledDescriptors = labeledDescriptors.filter(e => e.name !== name);
+  saveEnrollments(labeledDescriptors.map(e => ({ name: e.name, descriptor: Array.from(e.descriptor) })));
+  renderEnrolledList();
+}
+
+function renderEnrolledList() {
+  const el = document.getElementById('enrolledList');
+  if (labeledDescriptors.length === 0) {
+    el.innerHTML = '<div>No one enrolled yet.</div>';
+  } else {
+    el.innerHTML = labeledDescriptors.map(e =>
+      `<div class="enrolled-item"><span>${escapeHtml(e.name)}${e.section ? ' <span class="pill">' + escapeHtml(e.section) + '</span>' : ''}</span><button class="small-btn" onclick="deleteEnrollment('${escapeHtml(e.name)}')">Remove</button></div>`
+    ).join('');
+  }
+}
+function capturePhoto() {
+  const tempCanvas = document.createElement('canvas');
+  tempCanvas.width = video.videoWidth || 640;
+  tempCanvas.height = video.videoHeight || 480;
+  const tempCtx = tempCanvas.getContext('2d');
+  tempCtx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
+  return tempCanvas.toDataURL('image/jpeg', 0.6);
+}	
+function recordAttendance(name) {
+  const records = loadRecords();
+  const now = new Date();
+  const enrolled = labeledDescriptors.find(e => e.name === name);
+  const recordData = {
+  name: name,
+  section: enrolled ? enrolled.section : '',
+  date: now.toLocaleDateString(),
+  time: now.toLocaleTimeString(),
+  ts: now.getTime(),
+  image: capturePhoto()
+};
+
+  records.push(recordData);
+  saveRecords(records);
+  renderLog();
+
+  if (GOOGLE_SHEET_WEB_APP_URL && GOOGLE_SHEET_WEB_APP_URL !== "YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL_HERE") {
+    fetch(GOOGLE_SHEET_WEB_APP_URL, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "text/plain" },
+      body: JSON.stringify(recordData)
+    }).catch(err => console.error("Sync error:", err));
+  }
+}
+
+function renderLog() {
+  const records = loadRecords().slice().reverse();
+  document.getElementById('countPill').textContent = `${records.length} records`;
+  document.getElementById('logBody').innerHTML = records.map(r =>
+    `<tr><td>${escapeHtml(r.name)}</td><td>${escapeHtml(r.section || '')}</td><td>${r.date}</td><td>${r.time}</td></tr>`
+  ).join('');
+}
+
+function clearRecords() {
+  if (!confirm('Delete all attendance records?')) return;
+  saveRecords([]);
+  renderLog();
+}
+
+function exportCSV() {
+  const records = loadRecords();
+  let csv = 'Name,Section,Date,Time\n';
+  records.forEach(r => { csv += `${r.name},${r.section || ''},${r.date},${r.time}\n`; });
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'attendance_' + new Date().toISOString().slice(0, 10) + '.csv';
+  a.click();
+}
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('tabRecognize').classList.toggle('active', m === 'recognize');
+  document.getElementById('tabEnroll').classList.toggle('active', m === 'enroll');
+  document.getElementById('enrollControls').classList.toggle('hidden', m !== 'enroll');
+  if (m !== 'enroll') cancelEnrollment();
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+init();
+</script>
+</body>
+</html>
